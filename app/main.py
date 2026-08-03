@@ -51,10 +51,6 @@ from app.state import (
 )
 
 
-# =========================================================
-# FASTAPI APPLICATION
-# =========================================================
-
 app = FastAPI(
     title="AI Diff Review Service",
     version=APP_VERSION,
@@ -63,22 +59,11 @@ app = FastAPI(
 started_at = time.time()
 
 
-# =========================================================
-# AUTHENTICATION MIDDLEWARE
-# =========================================================
-
 @app.middleware("http")
 async def protect_all_v1_routes(
     request: Request,
     call_next,
 ):
-    """
-    Protect every route beginning with /v1/.
-
-    This also protects unsupported methods, such as:
-    DELETE /v1/reviews
-    """
-
     if request.url.path.startswith("/v1/"):
         authorization = request.headers.get(
             "Authorization",
@@ -102,10 +87,6 @@ async def protect_all_v1_routes(
     return await call_next(request)
 
 
-# =========================================================
-# ERROR HANDLERS
-# =========================================================
-
 @app.exception_handler(
     RequestValidationError
 )
@@ -113,11 +94,6 @@ async def validation_exception_handler(
     request: Request,
     exception: RequestValidationError,
 ):
-    """
-    Convert FastAPI validation errors into the
-    error envelope required by the assessment.
-    """
-
     errors = exception.errors()
 
     invalid_json = any(
@@ -198,17 +174,9 @@ async def general_exception_handler(
     )
 
 
-# =========================================================
-# HASHING
-# =========================================================
-
 def create_body_hash(
     raw_body: bytes,
 ) -> str:
-    """
-    Used for byte-identical idempotency checks.
-    """
-
     return hashlib.sha256(
         raw_body
     ).hexdigest()
@@ -218,10 +186,6 @@ def create_cache_key(
     diff: str,
     options: ReviewOptions,
 ) -> str:
-    """
-    Cache is based on the diff and normalized options.
-    """
-
     canonical_content = json.dumps(
         {
             "diff": diff,
@@ -236,10 +200,6 @@ def create_cache_key(
         canonical_content.encode("utf-8")
     ).hexdigest()
 
-
-# =========================================================
-# SSE FORMAT
-# =========================================================
 
 def format_sse_event(
     event_type: str,
@@ -257,9 +217,13 @@ def format_sse_event(
     )
 
 
-# =========================================================
-# PUBLIC ENDPOINTS
-# =========================================================
+@app.get("/")
+async def root():
+    return {
+        "service": "AI Diff Review Service",
+        "status": "running",
+    }
+
 
 @app.get("/health")
 async def health():
@@ -296,10 +260,6 @@ async def spec():
     }
 
 
-# =========================================================
-# POST /v1/reviews
-# =========================================================
-
 @app.post(
     "/v1/reviews",
     status_code=202,
@@ -315,19 +275,7 @@ async def create_review(
         alias="Idempotency-Key",
     ),
 ):
-    """
-    Create an asynchronous diff review job.
-
-    Swagger will now display:
-    1. Idempotency-Key header
-    2. Request body
-    """
-
     raw_body = await request.body()
-
-    # -----------------------------------------------------
-    # PAYLOAD SIZE
-    # -----------------------------------------------------
 
     if len(raw_body) > MAX_PAYLOAD_BYTES:
         return api_error(
@@ -335,10 +283,6 @@ async def create_review(
             "payload_too_large",
             "Payload exceeds 1 MiB",
         )
-
-    # -----------------------------------------------------
-    # RATE LIMIT
-    # -----------------------------------------------------
 
     client_identifier = (
         request.client.host
@@ -362,10 +306,6 @@ async def create_review(
             },
         )
 
-    # -----------------------------------------------------
-    # VALIDATE DIFF
-    # -----------------------------------------------------
-
     if not is_valid_unified_diff(
         review_request.diff
     ):
@@ -377,10 +317,6 @@ async def create_review(
                 "unified diff"
             ),
         )
-
-    # -----------------------------------------------------
-    # VALIDATE PROVIDER
-    # -----------------------------------------------------
 
     if (
         review_request.options.provider
@@ -395,10 +331,6 @@ async def create_review(
             "Provider must be mock or llm",
         )
 
-    # -----------------------------------------------------
-    # CREATE HASHES
-    # -----------------------------------------------------
-
     request_body_hash = create_body_hash(
         raw_body
     )
@@ -407,10 +339,6 @@ async def create_review(
         review_request.diff,
         review_request.options,
     )
-
-    # -----------------------------------------------------
-    # IDEMPOTENCY
-    # -----------------------------------------------------
 
     async with state_lock:
         if idempotency_key:
@@ -453,10 +381,6 @@ async def create_review(
                         existing_job_id
                     ]["status"],
                 }
-
-        # -------------------------------------------------
-        # CREATE NEW JOB
-        # -------------------------------------------------
 
         job_id = uuid.uuid4().hex
 
@@ -504,10 +428,6 @@ async def create_review(
                 "jobId": job_id,
             }
 
-    # -----------------------------------------------------
-    # SAVE QUEUED EVENT
-    # -----------------------------------------------------
-
     await publish_event(
         job_id,
         "status",
@@ -515,10 +435,6 @@ async def create_review(
             "status": "queued",
         },
     )
-
-    # -----------------------------------------------------
-    # START BACKGROUND JOB
-    # -----------------------------------------------------
 
     asyncio.create_task(
         process_review_job(
@@ -531,10 +447,6 @@ async def create_review(
         "status": "queued",
     }
 
-
-# =========================================================
-# GET /v1/reviews/{job_id}
-# =========================================================
 
 @app.get(
     "/v1/reviews/{job_id}",
@@ -573,10 +485,6 @@ async def get_review(
     return response
 
 
-# =========================================================
-# GET /v1/reviews/{job_id}/stream
-# =========================================================
-
 @app.get(
     "/v1/reviews/{job_id}/stream",
     dependencies=[
@@ -614,7 +522,6 @@ async def stream_review(
                     subscriber_queue
                 )
 
-        # Replay stored events.
         for (
             event_type,
             event_data,
